@@ -621,7 +621,7 @@ static const struct block_device_operations nvm_fops = {
 };
 
 static int nvm_create_target(struct nvm_dev *dev,
-						struct nvm_ioctl_create *create)
+					struct nvm_ioctl_tgt_create *create)
 {
 	struct nvm_ioctl_create_simple *s = &create->conf.s;
 	struct request_queue *tqueue;
@@ -636,15 +636,16 @@ static int nvm_create_target(struct nvm_dev *dev,
 	}
 
 	down_write(&nvm_lock);
-	tt = nvm_find_target_type(create->tgttype);
+	tt = nvm_find_target_type(create->target.tgttype);
 	if (!tt) {
-		pr_err("nvm: target type %s not found\n", create->tgttype);
+		pr_err("nvm: target type %s not found\n",
+							create->target.tgttype);
 		up_write(&nvm_lock);
 		return -EINVAL;
 	}
 
 	list_for_each_entry(t, &dev->online_targets, list) {
-		if (!strcmp(create->tgtname, t->disk->disk_name)) {
+		if (!strcmp(create->target.tgtname, t->disk->disk_name)) {
 			pr_err("nvm: target name already exists.\n");
 			up_write(&nvm_lock);
 			return -EINVAL;
@@ -665,7 +666,7 @@ static int nvm_create_target(struct nvm_dev *dev,
 	if (!tdisk)
 		goto err_queue;
 
-	sprintf(tdisk->disk_name, "%s", create->tgtname);
+	sprintf(tdisk->disk_name, "%s", create->target.tgtname);
 	tdisk->flags = GENHD_FL_EXT_DEVT;
 	tdisk->major = 0;
 	tdisk->first_minor = 0;
@@ -721,13 +722,13 @@ static void nvm_remove_target(struct nvm_target *t)
 	kfree(t);
 }
 
-static int __nvm_configure_create(struct nvm_ioctl_create *create)
+static int __nvm_configure_create(struct nvm_ioctl_tgt_create *create)
 {
 	struct nvm_dev *dev;
 	struct nvm_ioctl_create_simple *s;
 
 	down_write(&nvm_lock);
-	dev = nvm_find_nvm_dev(create->dev);
+	dev = nvm_find_nvm_dev(create->target.dev);
 	up_write(&nvm_lock);
 	if (!dev) {
 		pr_err("nvm: device not found\n");
@@ -749,7 +750,7 @@ static int __nvm_configure_create(struct nvm_ioctl_create *create)
 	return nvm_create_target(dev, create);
 }
 
-static int __nvm_configure_remove(struct nvm_ioctl_remove *remove)
+static int __nvm_configure_remove(struct nvm_ioctl_tgt_remove *remove)
 {
 	struct nvm_target *t = NULL;
 	struct nvm_dev *dev;
@@ -772,6 +773,16 @@ static int __nvm_configure_remove(struct nvm_ioctl_remove *remove)
 	}
 
 	return 0;
+}
+
+static void __nvm_get_info_target(struct nvm_target *tgt, struct nvm_dev *dev,
+					struct nvm_ioctl_tgt_info *tgt_info)
+{
+	tgt_info->version[0] = tgt->type->version[0];
+	tgt_info->version[1] = tgt->type->version[1];
+	tgt_info->version[2] = tgt->type->version[2];
+	strncpy(tgt_info->target.tgttype, tgt->type->name, DISK_NAME_LEN);
+	strncpy(tgt_info->target.dev, dev->name, DISK_NAME_LEN);
 }
 
 #ifdef CONFIG_NVM_DEBUG
@@ -805,7 +816,7 @@ static int nvm_configure_show(const char *val)
 
 static int nvm_configure_remove(const char *val)
 {
-	struct nvm_ioctl_remove remove;
+	struct nvm_ioctl_tgt_remove remove;
 	char opcode;
 	int ret;
 
@@ -822,12 +833,14 @@ static int nvm_configure_remove(const char *val)
 
 static int nvm_configure_create(const char *val)
 {
-	struct nvm_ioctl_create create;
+	struct nvm_ioctl_tgt_create create;
 	char opcode;
 	int lun_begin, lun_end, ret;
 
-	ret = sscanf(val, "%c %256s %256s %48s %u:%u", &opcode, create.dev,
-						create.tgtname, create.tgttype,
+	ret = sscanf(val, "%c %256s %256s %48s %u:%u", &opcode,
+						create.target.dev,
+						create.target.tgtname,
+						create.target.tgttype,
 						&lun_begin, &lun_end);
 	if (ret != 6) {
 		pr_err("nvm: invalid command. Use \"opcode device name tgttype lun_begin:lun_end\".\n");
@@ -921,12 +934,12 @@ static long nvm_ioctl_info(struct file *file, void __user *arg)
 
 	down_write(&nvm_lock);
 	list_for_each_entry(tt, &nvm_targets, list) {
-		struct nvm_ioctl_info_tgt *tgt = &info->tgts[tgt_iter];
+		struct nvm_ioctl_tgt_info *tgt = &info->tgts[tgt_iter];
 
 		tgt->version[0] = tt->version[0];
 		tgt->version[1] = tt->version[1];
 		tgt->version[2] = tt->version[2];
-		strncpy(tgt->tgtname, tt->name, NVM_TTYPE_NAME_MAX);
+		strncpy(tgt->target.tgtname, tt->name, NVM_TTYPE_NAME_MAX);
 
 		tgt_iter++;
 	}
@@ -958,9 +971,9 @@ static long nvm_ioctl_get_devices(struct file *file, void __user *arg)
 
 	down_write(&nvm_lock);
 	list_for_each_entry(dev, &nvm_devices, devices) {
-		struct nvm_ioctl_device_info *info = &devices->info[i];
+		struct nvm_ioctl_dev_info *info = &devices->info[i];
 
-		sprintf(info->devname, "%s", dev->name);
+		sprintf(info->dev, "%s", dev->name);
 		if (dev->mt) {
 			info->bmversion[0] = dev->mt->version[0];
 			info->bmversion[1] = dev->mt->version[1];
@@ -992,17 +1005,17 @@ static long nvm_ioctl_get_devices(struct file *file, void __user *arg)
 
 static long nvm_ioctl_dev_create(struct file *file, void __user *arg)
 {
-	struct nvm_ioctl_create create;
+	struct nvm_ioctl_tgt_create create;
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	if (copy_from_user(&create, arg, sizeof(struct nvm_ioctl_create)))
+	if (copy_from_user(&create, arg, sizeof(struct nvm_ioctl_tgt_create)))
 		return -EFAULT;
 
-	create.dev[DISK_NAME_LEN - 1] = '\0';
-	create.tgttype[NVM_TTYPE_NAME_MAX - 1] = '\0';
-	create.tgtname[DISK_NAME_LEN - 1] = '\0';
+	create.target.dev[DISK_NAME_LEN - 1] = '\0';
+	create.target.tgttype[NVM_TTYPE_NAME_MAX - 1] = '\0';
+	create.target.tgtname[DISK_NAME_LEN - 1] = '\0';
 
 	if (create.flags != 0) {
 		pr_err("nvm: no flags supported\n");
@@ -1014,12 +1027,12 @@ static long nvm_ioctl_dev_create(struct file *file, void __user *arg)
 
 static long nvm_ioctl_dev_remove(struct file *file, void __user *arg)
 {
-	struct nvm_ioctl_remove remove;
+	struct nvm_ioctl_tgt_remove remove;
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	if (copy_from_user(&remove, arg, sizeof(struct nvm_ioctl_remove)))
+	if (copy_from_user(&remove, arg, sizeof(struct nvm_ioctl_tgt_remove)))
 		return -EFAULT;
 
 	remove.tgtname[DISK_NAME_LEN - 1] = '\0';
@@ -1123,23 +1136,104 @@ static long nvm_ioctl_dev_factory(struct file *file, void __user *arg)
 	return nvm_dev_factory(dev, fact.flags);
 }
 
+static long nvm_ioctl_dev_get_info(struct file *file, void __user *arg)
+{
+	struct nvm_ioctl_dev_info dev_info;
+	struct nvm_dev *dev;
+
+	if (copy_from_user(&dev_info, arg, sizeof(struct nvm_ioctl_dev_info)))
+		return -EFAULT;
+
+	dev_info.dev[DISK_NAME_LEN - 1] = '\0';
+
+	dev = nvm_find_nvm_dev(dev_info.dev);
+	if (!dev) {
+		pr_err("nvm: device not found\n");
+		return -EINVAL;
+	}
+
+	if (dev->mt) {
+		dev_info.bmversion[0] = dev->mt->version[0];
+		dev_info.bmversion[1] = dev->mt->version[1];
+		dev_info.bmversion[2] = dev->mt->version[2];
+		sprintf(dev_info.bmname, "%s", dev->mt->name);
+	} else {
+		sprintf(dev_info.bmname, "none");
+	}
+
+	dev_info.prop.sec_size = dev->sec_size;
+	dev_info.prop.sec_per_page = dev->sec_per_pg;
+	dev_info.prop.max_sec_io = nvm_dev_max_sectors(dev);
+	dev_info.prop.nr_planes = nvm_dev_nr_planes(dev);
+	dev_info.prop.nr_luns  = dev->nr_luns;
+	dev_info.prop.nr_channels = dev->nr_chnls;
+	dev_info.prop.plane_mode = dev->plane_mode;
+	dev_info.prop.oob_size = dev->oob_size;
+
+	if (copy_to_user(arg, &dev_info, sizeof(struct nvm_ioctl_dev_info)))
+		return -EFAULT;
+
+	return 0;
+}
+
+static long nvm_ioctl_tgt_get_info(struct file *file, void __user *arg)
+{
+	struct nvm_target *t = NULL;
+	struct nvm_dev *dev;
+	struct nvm_ioctl_tgt_info tgt_info;
+	int ret = -1;
+
+	if (copy_from_user(&tgt_info, arg, sizeof(struct nvm_ioctl_tgt_info)))
+		return -EFAULT;
+
+	tgt_info.target.tgtname[DISK_NAME_LEN - 1] = '\0';
+
+	down_write(&nvm_lock);
+	list_for_each_entry(dev, &nvm_devices, devices)
+		list_for_each_entry(t, &dev->online_targets, list) {
+			if (!strcmp(tgt_info.target.tgtname, t->disk->disk_name)) {
+				__nvm_get_info_target(t, dev, &tgt_info);
+				ret = 0;
+				break;
+			}
+		}
+	up_write(&nvm_lock);
+
+	if (ret) {
+		pr_err("nvm: target \"%s\" doesn't exist.\n",
+							tgt_info.target.tgtname);
+		return -EINVAL;
+	}
+
+	if (copy_to_user(arg, &tgt_info, sizeof(struct nvm_ioctl_tgt_info)))
+		return -EFAULT;
+
+	return 0;
+}
+
 static long nvm_ctl_ioctl(struct file *file, uint cmd, unsigned long arg)
 {
 	void __user *argp = (void __user *)arg;
 
 	switch (cmd) {
+	/* device - general */
 	case NVM_INFO:
 		return nvm_ioctl_info(file, argp);
 	case NVM_GET_DEVICES:
 		return nvm_ioctl_get_devices(file, argp);
-	case NVM_DEV_CREATE:
+	case NVM_DEV_CREATE_TGT:
 		return nvm_ioctl_dev_create(file, argp);
-	case NVM_DEV_REMOVE:
+	case NVM_DEV_REMOVE_TGT:
 		return nvm_ioctl_dev_remove(file, argp);
 	case NVM_DEV_INIT:
 		return nvm_ioctl_dev_init(file, argp);
 	case NVM_DEV_FACTORY:
 		return nvm_ioctl_dev_factory(file, argp);
+	case NVM_DEV_GET_INFO:
+		return nvm_ioctl_dev_get_info(file, argp);
+	/* target - specific */
+	case NVM_TGT_GET_INFO:
+		return nvm_ioctl_tgt_get_info(file, argp);
 	}
 	return 0;
 }

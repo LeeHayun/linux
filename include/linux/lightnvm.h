@@ -550,6 +550,22 @@ extern int nvm_update_sysblock(struct nvm_dev *, struct nvm_sb_info *);
 extern int nvm_init_sysblock(struct nvm_dev *, struct nvm_sb_info *);
 
 extern int nvm_dev_factory(struct nvm_dev *, int flags);
+
+static inline unsigned int nvm_dev_nr_planes(struct nvm_dev *dev)
+{
+	return (1 << dev->plane_mode);
+}
+
+static inline unsigned int nvm_dev_nr_luns(struct nvm_dev *dev)
+{
+	return (unsigned int)(dev->nr_luns);
+}
+
+static inline unsigned int nvm_dev_max_sectors(struct nvm_dev *dev)
+{
+	return (unsigned int)dev->ops->max_phys_sect;
+}
+
 #else /* CONFIG_NVM */
 struct nvm_dev_ops;
 
