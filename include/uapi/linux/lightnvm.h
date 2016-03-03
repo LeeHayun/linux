@@ -81,7 +81,7 @@ struct nvm_ioctl_dev_info {
 	__u32 flags;
 	__u32 reserved[8];
 
-	struct nvm_ioctl_dev_prop prop;
+//	struct nvm_ioctl_dev_prop prop;
 };
 
 struct nvm_ioctl_get_devices {
